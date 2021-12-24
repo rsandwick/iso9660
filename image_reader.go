@@ -63,6 +63,7 @@ type File struct {
 	ra       io.ReaderAt
 	de       *DirectoryEntry
 	children []*File
+	susp     map[string]string
 }
 
 var _ os.FileInfo = &File{}
@@ -83,11 +84,20 @@ func (f *File) Mode() os.FileMode {
 	if f.IsDir() {
 		mode |= os.ModeDir
 	}
+	if v, ok := f.susp["PX"]; ok {
+		if x, err := UnmarshalInt32LSBMSB([]byte(v[:8])); err == nil {
+			mode |= os.FileMode(x) & os.ModePerm
+		}
+	}
 	return mode
 }
 
 // Name returns the base name of the given entry
 func (f *File) Name() string {
+	if v, ok := f.susp["NM"]; ok && v[0] == 0 {
+		return v[1:]
+	}
+
 	if f.IsDir() {
 		return f.de.Identifier
 	}
@@ -121,7 +131,7 @@ func (f *File) Size() int64 {
 
 // Sys returns nil
 func (f *File) Sys() interface{} {
-	return nil
+	return f.de
 }
 
 // GetChildren returns the chilren entries in case of a directory
@@ -157,6 +167,14 @@ func (f *File) GetChildren() ([]*File, error) {
 			if err := newDE.UnmarshalBinary(buffer[i : i+entryLength]); err != nil {
 				return nil, err
 			}
+
+			susp := make(map[string]string)
+			for i, l := 0, 0; i < len(newDE.SystemUse)-1; i += l {
+				k := string(newDE.SystemUse[i : i+2])
+				l = int(newDE.SystemUse[i+2])
+				susp[k] = string(newDE.SystemUse[i+4 : i+l])
+			}
+
 			i += entryLength
 			if newDE.Identifier == string([]byte{0}) || newDE.Identifier == string([]byte{1}) {
 				continue
@@ -165,6 +183,7 @@ func (f *File) GetChildren() ([]*File, error) {
 			newFile := &File{ra: f.ra,
 				de:       newDE,
 				children: nil,
+				susp:     susp,
 			}
 
 			f.children = append(f.children, newFile)
